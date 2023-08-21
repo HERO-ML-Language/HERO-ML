@@ -1,0 +1,35 @@
+// Example: Matrix multiplication using nested forall expressions
+
+// declare variables (two-dimensional int arrays)
+A, B, AxB : Array (int,int) int
+
+// define the matrix A (dense 4 x 4 matrix)
+A = [ (1..4, 1..4) :
+       1,  2,  3,  4;
+       5,  6,  7,  8;
+       9, 10, 11, 12;
+      13, 14, 15, 16; ]
+
+// define the matrix B (sparse 4 x 4 diagonal matrix)
+B = [ (1,1):1,
+              (2,2):2,
+                      (3,3):3,
+                              (4,4):4 ]
+
+// debugging outputs
+out A, B
+
+// perform the matrix multiplication
+AxB = forall (i,j) -> reduce(+, forall k -> A[i,k] * B[k,j])
+
+// this is equivalent to:
+//
+// for i = 1..4 do
+//     for j = 1..4 do
+//         AxB[i,j] = 0
+//         for k = 1..4 do
+//             AxB[i,j] = AxB[i,j] + A[i,k] * B[k,j]
+
+// debugging outputs
+out AxB
+out bound(AxB)

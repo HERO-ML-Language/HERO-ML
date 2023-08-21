@@ -1,0 +1,306 @@
+﻿{
+
+open FSharp.Text.Lexing
+open Parser
+
+let get_lexeme = LexBuffer<_>.LexemeString
+
+}
+
+// '\r' is considered a line break by itself only if it's not directly connected
+// to a '\n' on either side (if it is, then the first alternative below will be matched
+// because it's the longer one)
+let newline = '\r'?'\n''\r'? | '\r'
+
+let digit = ['0'-'9']
+
+rule get_next_token = parse
+    | [' ''\t']+ { get_next_token lexbuf }
+    | newline    { lexbuf.EndPos <- lexbuf.EndPos.NextLine; NEWLINE }
+    | "//"       { skip_line_comment lexbuf }
+    | "/*"       { skip_block_comment 1 lexbuf }
+    | eof        { EOF }
+
+    // keywords --------------------------------------------------
+    // types
+    | "int"   { INT }
+    | "float" { FLOAT }
+    | "bool"  { BOOL }
+    | "Bound" { BOUND }
+    | "Array" { ARRAY }
+
+    // statements
+    | "skip"    { SKIP }
+    | "if"      { IF }
+    | "then"    { THEN }
+    | "else"    { ELSE }
+    | "while"   { WHILE }
+    | "do"      { DO }
+    | "foreach" { FOREACH }
+    | "in"      { IN }
+    | "out"     { OUT }
+
+    // undef and ERROR "constants" for testing
+    | "?"      { UNDEF }
+    | "ERROR"  { ERROR }
+
+    // constants
+    | "true"   { TRUE }
+    | "false"  { FALSE }
+    | "empty"  { EMPTY }
+    | "all"    { ALL }
+
+    // expressions
+    | "forall" { FORALL }
+
+    // special function names
+    | "member" { ID_MEMBER }
+    | "reduce" { ID_REDUCE }
+    | "scan"   { ID_SCAN }
+
+    // punctuation --------------------------------------------------
+    | '('  { L_PAREN }
+    | ')'  { R_PAREN }
+    | '{'  { L_BRACE }
+    | '}'  { R_BRACE }
+    | '['  { L_BRACK }
+    | ']'  { R_BRACK }
+    | ','  { COMMA }
+    | ':'  { COLON }
+    | ';'  { SEMICOLON }
+    | ".." { DOT_DOT }
+
+    // operators --------------------------------------------------
+    | '+'  { PLUS }
+    | '-'  { MINUS }
+    | '*'  { MUL }
+    | '/'  { DIV }
+    | '%'  { MOD }
+    | "<<" { L_SHIFT }
+    | ">>" { R_SHIFT }
+    | '='  { EQ }
+    | "!=" { NE }
+    | '<'  { LT }
+    | "<=" { LE }
+    | ">=" { GE }
+    | '>'  { GT }
+    | "&&" { AND }
+    | "||" { OR }
+    | "->" { ARROW }
+    | '|'  { V_LINE }
+
+    // symbolic --------------------------------------------------
+    | ['_''a'-'z''A'-'Z']['_''a'-'z''A'-'Z''0'-'9']* { ID (get_lexeme lexbuf) }
+    | digit+                                         { INT_LIT (get_lexeme lexbuf) }
+
+    // floats
+    | (digit+'.'digit*|'.'digit+)(['e''E']['+''-']?digit+)?
+    | digit+['e''E']['+''-']?digit+ { FLOAT_LIT (get_lexeme lexbuf) }
+
+    // special rule to make sure that digit+".." is parsed as an integer literal followed by "..",
+    // and not as a float literal ending with the decimal point (digit+".") and then followed by a period
+    | digit+".." {
+        let lexeme = get_lexeme lexbuf
+        INT_LIT_DOT_DOT lexeme[..lexeme.Length - 3]
+    }
+
+    | _ { LEX_ERROR }
+
+and skip_line_comment = parse
+    | newline { lexbuf.EndPos <- lexbuf.EndPos.NextLine; NEWLINE }
+    | eof     { EOF }
+    | _       { skip_line_comment lexbuf }
+
+and skip_block_comment level = parse
+    // newlines inside block comments are gobbled
+    | newline { lexbuf.EndPos <- lexbuf.EndPos.NextLine; skip_block_comment level lexbuf }
+    | "/*"    { skip_block_comment (level+1) lexbuf }
+    | "*/"    { if level = 1 then get_next_token lexbuf else skip_block_comment (level-1) lexbuf }
+    | eof     { LEX_ERROR }
+    | _       { skip_block_comment level lexbuf }
+
+{
+
+type Stateful_Lexer (ext_enabled : bool, src : string, file_index : int) =
+    // This is the LexBuffer that is actually used to read tokens from. The parser shouldn't have
+    // direct access to this but should instead be given the dummy buffer this.Lex_Buffer_for_Parser.
+    let wrapped_lexbuf = LexBuffer<char>.FromString src
+
+    // postponed tokens
+    let mutable token_buffer = []
+
+    // last token returned
+    let mutable last_token = (EOF, Position.Empty, Position.Empty)
+
+    // keeps track of the indentation (column numbers) of nested code blocks
+    let mutable indent_stack = []
+
+    // are we at the beginning of a new block?
+    let mutable new_block = true
+
+    // parenthesis stack to keep track of the parenthesis nesting level
+    let mutable paren_stack = []
+
+    // The LexBuffer object that should be given to the parser. The parser doesn't actually read any
+    // tokens from it. It is only used to transfer certain additional information back to the
+    // parser, such as the source code positions of the most recent token (through members StartPos
+    // and EndPos which are read by the parser) and whether end-of-file has been reached (through
+    // member IsPastEndOfStream).
+    member this.Lex_Buffer_for_Parser =
+        let lexbuf = LexBuffer<char>.FromString ""
+        lexbuf.BufferLocalStore["file_index"] <- file_index
+        lexbuf.BufferLocalStore["Lexer_Interface"] <-
+          { Lexer_Interface.Begin_New_Block = this.Begin_New_Block
+            Lexer_Interface.Renew_Block     = this.Renew_Block
+            Lexer_Interface.Clear_Parens    = this.Clear_Parens
+            Lexer_Interface.Get_Last_Lexeme = this.Get_Last_Lexeme }
+        lexbuf
+
+    member this.Get_Next_Token (lexbuf : LexBuffer<char>) : token =
+#if DEBUG_LEXER
+        let indent_stack_debug () = printfn "Indentation stack: %A" (List.rev indent_stack)
+        let paren_stack_debug () = printfn "Parenthesis stack: %A" (List.rev paren_stack)
+#else
+        let indent_stack_debug () = ()
+        let paren_stack_debug () = ()
+#endif
+        // fetch the next token, either from the input stream or from token_buffer
+        let t,p1,p2 =
+            match token_buffer with
+            | head::tail ->
+                token_buffer <- tail
+                head
+            | [] ->
+                // read a new token from the input stream
+                let rec gnt np_opt =
+                    let t = get_next_token wrapped_lexbuf
+                    if t = NEWLINE then
+                        let np = wrapped_lexbuf.StartPos
+                        gnt (Some np)
+                    else t, np_opt
+                let t,np = gnt None
+                let p1 = wrapped_lexbuf.StartPos
+                let p2 = wrapped_lexbuf.EndPos
+                // some tokens might need to be reinterpreted
+                let t,p1,p2 =
+                    match t with
+                    | INT_LIT_DOT_DOT int_lexeme ->
+                        let m = p1.EndOfToken int_lexeme.Length
+                        token_buffer <- [(DOT_DOT, m, p2)]
+                        INT_LIT int_lexeme, p1, m
+                    | UNDEF when not ext_enabled ->
+                        LEX_ERROR, p1, p2
+                    | ERROR when not ext_enabled ->
+                        // "ERROR" is a valid identifier
+                        ID (get_lexeme wrapped_lexbuf), p1, p2
+                    | _ ->
+                        t,p1,p2
+                // keywords that begin a new code block are always followed by a `BLOCK_BEG' token
+                match t with THEN | ELSE | DO -> token_buffer <- [(BLOCK_BEGIN,p2,p2)] | _ -> ()
+                // line breaking and indentation is ignored inside parentheses
+                if paren_stack.IsEmpty then
+                    // check the column number of the token just fetched against the current
+                    // indentation to see if any control tokens need to be returned first
+                    let t_col = p1.Column
+                    let _,_,last_p2 = last_token
+                    if t = EOF then
+                        if indent_stack.IsEmpty then
+                            t,p1,p2
+                        else
+                            let num_be = indent_stack.Length - 1
+                            indent_stack <- []
+                            indent_stack_debug ()
+                            let be = (BLOCK_END, last_p2, last_p2)
+                            token_buffer <- (List.replicate num_be be) @ (t,p1,p2) :: token_buffer
+                            if new_block then
+                                be
+                            else
+                                STMT_END, last_p2, last_p2
+                    elif (not indent_stack.IsEmpty) && (new_block || np.IsSome) && (t_col <= indent_stack.Head) then
+                        let num_be =
+                            match List.tryFindIndex ((>=) t_col) indent_stack with
+                            | Some 0 -> 0
+                            | Some n ->
+                                indent_stack <- List.skip n indent_stack
+                                indent_stack_debug ()
+                                n
+                            | None ->
+                                let n = indent_stack.Length - 1
+                                indent_stack <- [t_col]
+                                indent_stack_debug ()
+                                n
+                        let be = (BLOCK_END, last_p2, last_p2)
+                        token_buffer <- (List.replicate num_be be) @ (t,p1,p2) :: token_buffer
+                        if new_block then
+                            be
+                        else
+                            STMT_END, last_p2, last_p2
+                    else
+                        if new_block then
+                            indent_stack <- t_col :: indent_stack
+                            indent_stack_debug ()
+                        t,p1,p2
+                else
+                    t,p1,p2
+        // signal source code positions to the parser
+        lexbuf.StartPos <- p1
+        lexbuf.EndPos   <- p2
+        // prepare the lexer for the next invocation
+        new_block <- false
+        // push/pop parentheses and handle EOF
+        match t with
+        | L_PAREN | L_BRACE | L_BRACK ->
+            paren_stack <- t::paren_stack
+            paren_stack_debug ()
+        | R_PAREN | R_BRACE | R_BRACK ->
+            let left_tok = match t with R_PAREN -> L_PAREN | R_BRACE -> L_BRACE | _ -> L_BRACK
+            // in case of missing closing parentheses earlier in the input (i.e., syntax errors), we
+            // pop until a matching opening parenthesis appears, or leave the stack alone if it
+            // doesn't contain a matching parenthesis
+            match List.tryFindIndex ((=) left_tok) paren_stack with
+            | Some n ->
+                paren_stack <- List.skip (n+1) paren_stack
+                paren_stack_debug ()
+            | _ -> ()
+        | EOF ->
+            // leave a copy of EOF in token_buffer
+            token_buffer <- [(t,p1,p2)]
+            // signal to the parser that EOF has been reached
+            lexbuf.IsPastEndOfStream <- true
+        | _ -> ()
+        last_token <- (t,p1,p2)
+
+#if DEBUG_LEXER
+        printfn
+            "(%2d,%2d)-(%2d,%2d) %-11s \"%s\""
+                (p1.Line+1) p1.Column
+                (p2.Line+1) p2.Column
+                (token_to_string t)
+                (src[p1.AbsoluteOffset .. p2.AbsoluteOffset - 1])
+#endif
+        // return the token
+        t
+
+    // tells the lexer that the next token should set a new indentation level
+    member _.Begin_New_Block () =
+        new_block <- true
+
+    // tells the lexer to replace the top indentation instead of adding a new indentation level
+    member this.Renew_Block () =
+        indent_stack <- indent_stack.Tail
+        this.Begin_New_Block ()
+
+    // to be called during error recovery to make sure that indentation sensitivity is active
+    // (if the error occurred inside parentheses)
+    member _.Clear_Parens () =
+        paren_stack <- []
+
+    member this.Get_Last_Lexeme () =
+        let t,p1,p2 = last_token
+        match t with
+        | STMT_END    -> "(statement end)"
+        | BLOCK_BEGIN -> "(block begin)"
+        | BLOCK_END   -> "(block end)"
+        | EOF         -> "(end of file)"
+        | _ -> src[p1.AbsoluteOffset .. p2.AbsoluteOffset - 1]
+}

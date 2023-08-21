@@ -1,0 +1,10 @@
+.vs
+
+src/Core/obj
+src/Core/bin
+src/Interpreter/obj
+src/Interpreter/bin
+tests/UnitTests/obj
+tests/UnitTests/bin
+
+*.fsyacc.output

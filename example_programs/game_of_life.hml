@@ -1,0 +1,30 @@
+// Example: Game of Life
+
+W, N : Array (int,int) int
+k : int
+
+// initial world state (0 = dead cell, 1 = alive cell)
+W = [ 0,0,0,0,0,0;
+      0,0,0,1,0,0;
+      0,1,0,0,1,0;
+      0,1,0,0,1,0;
+      0,0,1,0,0,0;
+      0,0,0,0,0,0; ]
+out W
+
+// run for a number of generations
+k = 0
+while k < 2 do
+	// count live neighbours of each cell
+	// (for each position (i,j) in W, "cut out" a 3x3 square centered
+	// at (i,j) and sum over it)
+	N = forall (i,j) -> reduce(+, W | (i-1..i+1, j-1..j+1)) - W[i,j]
+
+	// apply the rules that determine if each cell (at position (i,j))
+	// should be alive or dead in the next generation
+	W = forall (i,j) -> if(N[i,j] = 3 || (N[i,j] = 2 && W[i,j] = 1), 1, 0)
+
+	// debugging output
+	out N, W
+
+	k = k + 1

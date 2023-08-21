@@ -1,0 +1,30 @@
+// Example: Max reduction
+
+a : Array int int
+ia, ib, h : int
+
+// a sparse array with some arbitrary numbers
+ia = 100
+ib = ia+15
+a = [ ia: -3, ia+1: 25, ia+3: 6, ia+5: 61, ia+6: -1, ia+7: 24, ia+8: 47, ia+10: -2, ib: 53 ]
+out a
+
+// compute h = min { 2^p : 2^p >= (ib - ia + 1) }
+h = 1; while h <= ib - ia do h = 2*h
+
+while h > 1 do
+	h = h / 2
+	// the right-hand side of the following forall can be read as:
+	//
+	//     max(a[i], a[i+h]) if both i and i+h belong to bound(a)
+	//     a[i]              if i belongs to bound(a) but i+h doesn't
+	//     a[i+h]            if i does not belong to bound(a)
+	//
+	// (Thus, it is undefined if neither i nor i+h belongs to bound(a))
+	a = forall i -> if(member(i,bound(a)),
+	                   if(member(i+h,bound(a)) && a[i] < a[i+h], a[i+h], a[i]),
+	                   a[i+h])
+	    | ia..ia+h-1
+	out h, a
+
+out a[ia]

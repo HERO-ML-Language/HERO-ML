@@ -1,0 +1,31 @@
+// Example: Radix sort
+
+n, m, i : int
+X, target, pow2 : Array int int
+
+X = [ 15, 6, 21, 1, 9, 19, 18, 11, 22, 10, 30, 3, 20, 5, 30, 31, 0, 24, 28, 4 ]
+n = size(bound(X))
+m = 5 // max number of bits needed
+
+// iterate from the least significant to the most significant bit...
+i = 0
+while i < m do
+	out i, X
+
+	// print out X in binary
+	out forall (x,y) -> (X[x] >> (m-1-y)) % 2 | (bound(X), 0..m-1)
+
+	// set target[k] = 1 - b_i and target[k+n] = b_i, where b_i is bit i of X[k]
+	target = forall j -> if(j < n, 1 - (X[j] >> i) % 2, (X[j-n] >> i) % 2)
+	out target
+
+	// compute actual target indices (could also be done immediately on the line above)
+	target = scan(+, target)
+	out target
+
+	// move the elements of X to their correct positions
+	foreach j do X[target[j + ((X[j] >> i) % 2) * n] - 1] = X[j]
+
+	i = i + 1
+
+out X
